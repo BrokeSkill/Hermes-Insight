@@ -44,7 +44,7 @@ Select any text in Hermes Desktop and a small popup appears with two actions:
 # Automatic
 ### Hermes Install (paste this into a Hermes Session)
 ```
-Install this Github Repository and follow the Instructions for Installation inside of the README.md
+Clone the GitHub repository located at https://github.com/BrokeSkill/Insight and follow the installation instructions outlined in the README.md file. Ensure that both the renderer and the backend are installed completely and correctly.
 ```
 OR
 ### Run automated install script
