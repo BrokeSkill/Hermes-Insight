@@ -1,4 +1,10 @@
 # Insight - Selection & Definition for Hermes Desktop
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/insight-banner-dark.png">
+    <img src="assets/insight-banner-light.png" alt="Insight" width="480">
+  </picture>
+</p>
 
 Insight is a two-part plugin for **Hermes Desktop** that turns any selected text
 into an immediate definition. Select a word anywhere in the app, hit **Define**
@@ -28,12 +34,12 @@ Select any text in Hermes Desktop and a small popup appears with two actions:
 - **Define** - opens the side panel and streams a definition of the selected
   term from the provider of your choice.
 
-![Insight in Action](Insight-1.png)
+![Insight in Action](assets/insight.png)
 
 ---
 
 ## Installation
-```git clone https://github.com/BrokeSkill/insight```
+```git clone https://github.com/BrokeSkill/Insight```
 
 # Automatic
 ### Hermes Install (paste this into a Hermes Session)
@@ -133,6 +139,11 @@ Everything comes from your normal Hermes config.
 
 The panel lets you pick a provider/model per lookup; "Session model (current
 chat)" uses whatever model you're chatting with.
+
+---
+
+## ToDo / Planned
+- Ask-Window inside the Definition-Panel
 
 ---
 
