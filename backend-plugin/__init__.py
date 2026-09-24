@@ -1,8 +1,4 @@
-import argparse, json, os, sys, threading, urllib.parse
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-PORT = int(os.environ.get("INSIGHT_PORT", "8643"))
-HOST = os.environ.get("INSIGHT_HOST", "0.0.0.0")
+import argparse, json, os, sys
 
 _payload_cache = None
 
@@ -236,92 +232,6 @@ def _stream_complete(term, template, provider, model, session_id, do_search, emi
     emit("done", {"text": acc, "sources": sources})
 
 
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *a):
-        pass
-
-    def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self._cors()
-        self.end_headers()
-
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        q = urllib.parse.parse_qs(parsed.query)
-        if parsed.path == "/providers":
-            body = json.dumps({"providers": _list_providers()}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self._cors()
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        if parsed.path == "/complete":
-            def emit(event, data):
-                try:
-                    self.wfile.write(f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode())
-                    self.wfile.flush()
-                except Exception:
-                    pass
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "close")
-            self._cors()
-            self.end_headers()
-            try:
-                _stream_complete(
-                    (q.get("term") or [""])[0],
-                    (q.get("template") or [""])[0],
-                    (q.get("provider") or [""])[0],
-                    (q.get("model") or [""])[0],
-                    (q.get("session_id") or [""])[0],
-                    (q.get("search") or ["0"])[0] in ("1", "true"),
-                    emit,
-                )
-            except Exception as e:
-                detail = f"{type(e).__name__}: {e}"
-                try:
-                    body_txt = getattr(e, "response", None)
-                    if body_txt is not None:
-                        raw = body_txt.read().decode("utf-8", "replace")[:400]
-                        if raw:
-                            detail += " | " + raw
-                except Exception:
-                    pass
-                emit("error", detail)
-            finally:
-                try:
-                    self.wfile.write(b"event: end\ndata: {}\n\n")
-                    self.wfile.flush()
-                except Exception:
-                    pass
-            return
-        self.send_response(404)
-        self.end_headers()
-
-
-_server = None
-
-
-def _ensure_server():
-    global _server
-    if _server is not None:
-        return
-    try:
-        srv = ThreadingHTTPServer((HOST, PORT), Handler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        _server = srv
-    except OSError:
-        _server = None
-
-
 def _setup(sub: argparse.ArgumentParser) -> None:
     sub.add_argument("--term", default="", help="Term to define")
     sub.add_argument("--template", default="", help="Format template (the only system instruction)")
@@ -329,71 +239,11 @@ def _setup(sub: argparse.ArgumentParser) -> None:
     sub.add_argument("--model", default="", help="Model id")
     sub.add_argument("--search", default="0", help="1 = run web search first")
     sub.add_argument("--list-providers", action="store_true", help="Print the provider list as JSON and exit")
-    sub.add_argument("--sse-url", action="store_true", help="Print the LAN-reachable SSE base URL and exit")
-
-
-def _sse_url() -> str:
-    try:
-        import socket
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("192.168.0.1", 80))
-            ip = s.getsockname()[0]
-        finally:
-            s.close()
-        return f"http://{ip}:{PORT}"
-    except Exception:
-        return f"http://127.0.0.1:{PORT}"
-
-
-def _ensure_daemon() -> None:
-    try:
-        import urllib.request
-        urllib.request.urlopen(f"http://127.0.0.1:{PORT}/providers", timeout=2)
-        return
-    except Exception:
-        pass
-    try:
-        import subprocess, sys
-        _log = os.environ.get("INSIGHT_DAEMON_LOG") or "/tmp/insight-daemon.log"
-        with open(_log, "a") as _lf:
-            _lf.write("[[ ensure_daemon spawn start ]]\n")
-        try:
-            subprocess.run(["pkill", "-f", "spec_from_file_location('b', _MOD)"], capture_output=True, timeout=5)
-        except Exception:
-            pass
-        mod_path = os.path.abspath(__file__)
-        agent_root = os.path.abspath(os.path.join(os.path.dirname(mod_path), "..", "..", "..", ".."))
-        if not os.path.isdir(os.path.join(agent_root, "hermes_cli")):
-            agent_root = os.path.expanduser("~/.hermes/hermes-agent")
-        code = (
-            f"_MOD = {mod_path!r}\n"
-            f"_ROOT = {agent_root!r}\n"
-            "import sys, time, importlib.util\n"
-            "if _ROOT and _ROOT not in sys.path:\n"
-            "    sys.path.insert(0, _ROOT)\n"
-            "spec = importlib.util.spec_from_file_location('b', _MOD)\n"
-            "m = importlib.util.module_from_spec(spec)\n"
-            "spec.loader.exec_module(m)\n"
-            "for _ in range(6):\n"
-            "    m._ensure_server()\n"
-            "    if m._server is not None:\n"
-            "        break\n"
-            "    time.sleep(1.0)\n"
-            "while True:\n"
-            "    time.sleep(3600)\n"
-        )
-        subprocess.Popen([sys.executable, "-c", code], start_new_session=True, stdout=open(_log, "a"), stderr=open(_log, "a"))
-    except Exception:
-        pass
 
 
 def _handler(args: argparse.Namespace) -> None:
     try:
-        if getattr(args, "sse_url", False):
-            _ensure_daemon()
-            out = {"sse_url": _sse_url()}
-        elif getattr(args, "list_providers", False) or not args.term:
+        if getattr(args, "list_providers", False) or not args.term:
             out = {"providers": _list_providers()}
         else:
             events = []
@@ -412,11 +262,10 @@ def _handler(args: argparse.Namespace) -> None:
 
 
 def register(ctx) -> None:
-    _ensure_server()
     ctx.register_cli_command(
         name="insight",
         help="Stateless definition backend for the Selection Definition plugin",
-        description="Spawns the SSE server + provides the providers/complete CLI.",
+        description="Stateless, provider-backed completions with optional web search, exposed as `hermes insight`.",
         setup_fn=_setup,
         handler_fn=_handler,
     )

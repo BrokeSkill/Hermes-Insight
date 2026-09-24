@@ -64,7 +64,7 @@ const SETTINGS_DEFAULTS = {
   providers: [],
   template: DEFAULT_TEMPLATE,
   transport: "direct",
-  search: { enabled: false, preset: "standard", apiKey: "", endpoint: "", maxResults: 5 },
+    search: { enabled: false, preset: "standard", endpoint: "", maxResults: 5 },
   last: { providerId: "", model: "" },
 };
 
@@ -77,7 +77,7 @@ function loadSettings(storage) {
     if (!raw) return SETTINGS_DEFAULTS;
     const parsed = JSON.parse(raw);
     if (parsed.search && parsed.search.preset && !["standard", "custom", "off"].includes(parsed.search.preset)) {
-      parsed.search = { ...parsed.search, preset: "standard", apiKey: "" };
+      parsed.search = { ...parsed.search, preset: "standard" };
     }
     return {
       ...SETTINGS_DEFAULTS,
@@ -220,43 +220,11 @@ function buildQuote(md) {
   return PREFIX + FENCE + "\n" + content + "\n" + PREFIX + FENCE + "\n";
 }
 
-const RICH_INPUT_SLOT = "composer-rich-input";
-
-function appendDraftNewline() {
-  const editor = document.querySelector(`[data-slot="${RICH_INPUT_SLOT}"]`);
-  if (!editor) return;
-  try { editor.focus({ preventScroll: true }); } catch { }
-  const sel = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(editor);
-  range.collapse(false);
-  sel?.removeAllRanges();
-  sel?.addRange(range);
-  let ok = false;
-  try { ok = document.execCommand("insertLineBreak"); } catch { ok = false; }
-  if (!ok) {
-    const br = document.createElement("BR");
-    range.deleteContents();
-    range.insertNode(br);
-    const after = document.createRange();
-    after.setStartAfter(br);
-    after.collapse(true);
-    sel?.removeAllRanges();
-    sel?.addRange(after);
-    editor.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  }
-}
-
 function insertQuoteIntoComposer(quoted) {
-  window.dispatchEvent(
-    new CustomEvent("hermes:composer-insert", {
-      detail: { mode: "block", target: "main", text: quoted },
-    })
-  );
-  window.dispatchEvent(
-    new CustomEvent("hermes:composer-focus", { detail: { target: "main" } })
-  );
-  window.requestAnimationFrame(() => window.setTimeout(appendDraftNewline, 0));
+  if (host && host.composer && typeof host.composer.insertText === "function") {
+    host.composer.insertText(null, quoted, { mode: "block" });
+    if (typeof host.composer.focus === "function") host.composer.focus();
+  }
 }
 
 const termAtom = atom("");
@@ -769,25 +737,6 @@ function friendlyError(e) {
 const SESSION_MODEL = "__session__";
 
 let gatewayModelsCache = null;
-let backendBaseUrl = "http://127.0.0.1:8643";
-let backendBaseProbed = false;
-
-async function ensureBackendBase() {
-  if (backendBaseProbed) return backendBaseUrl;
-  backendBaseProbed = true;
-  try {
-    if (host && typeof host.request === "function") {
-      const r = await host.request("cli.exec", { argv: ["insight", "--sse-url"], timeout: 30 });
-      const stdout = (r && r.result && (r.result.output || r.result.stdout)) || (r && r.output) || "";
-      const line = stdout.split("\n").find((l) => l.trim().startsWith("{"));
-      if (line) {
-        const parsed = JSON.parse(line);
-        if (parsed.sse_url) backendBaseUrl = parsed.sse_url.replace(/\/+$/, "");
-      }
-    }
-  } catch { }
-  return backendBaseUrl;
-}
 
 async function fetchGatewayModels() {
   if (gatewayModelsCache) return gatewayModelsCache;
@@ -804,12 +753,14 @@ async function fetchGatewayModels() {
       }
     }
   } catch { }
-  if (!providers.length) {
-    const base = await ensureBackendBase();
+  if (!providers.length && host && typeof host.request === "function") {
     try {
-      const r2 = await fetch(base + "/providers");
-      if (r2.ok) {
-        const parsed = await r2.json();
+      const r = await host.request("cli.exec", { argv: ["insight", "--list-providers"], timeout: 30 });
+      const out = (r && r.result) || r || {};
+      const stdout = out.output || out.stdout || "";
+      const line = stdout.split("\n").find((l) => l.trim().startsWith("{"));
+      if (line) {
+        const parsed = JSON.parse(line);
         providers = parsed.providers || [];
       }
     } catch { }
@@ -1028,85 +979,30 @@ function DefsPane({ onClose }) {
 
     (async () => {
       try {
-        const params = new URLSearchParams({
-          term: termText,
-          template: settings.template || "",
-          search: settings.search.enabled ? "1" : "0",
+        const argv = ["insight", "--term", termText, "--template", settings.template || "",
+                      "--search", settings.search.enabled ? "1" : "0"];
+        if (settings.last.providerId && settings.last.providerId !== SESSION_MODEL) argv.push("--provider", settings.last.providerId);
+        if (settings.last.model && settings.last.model !== SESSION_MODEL) argv.push("--model", settings.last.model);
+        const execP = host.request("cli.exec", { argv, timeout: 240 });
+        const aborted = new Promise((_, reject) => {
+          const onAbort = () => {
+            ctrl.signal.removeEventListener("abort", onAbort);
+            reject(Object.assign(new Error("AbortError"), { name: "AbortError" }));
+          };
+          if (ctrl.signal.aborted) onAbort();
+          else ctrl.signal.addEventListener("abort", onAbort);
         });
-        if (settings.last.providerId && settings.last.providerId !== SESSION_MODEL) {
-          params.set("provider", settings.last.providerId);
-        }
-        if (settings.last.model && settings.last.model !== SESSION_MODEL) {
-          params.set("model", settings.last.model);
-        }
-        let sid = "";
-        try {
-          const s = host.state && host.state.activeSessionId;
-          sid = s && typeof s.get === "function" ? s.get() : s || "";
-        } catch { }
-        if (sid) params.set("session_id", sid);
-
-        let res;
-        try {
-          const base = await ensureBackendBase();
-          res = await fetch(base + "/complete?" + params.toString(), { signal: ctrl.signal });
-        } catch (netErr) {
-          const argv = ["insight", "--term", termText, "--template", settings.template || "",
-                        "--search", settings.search.enabled ? "1" : "0"];
-          if (settings.last.providerId && settings.last.providerId !== SESSION_MODEL) argv.push("--provider", settings.last.providerId);
-          if (settings.last.model && settings.last.model !== SESSION_MODEL) argv.push("--model", settings.last.model);
-          const r = await host.request("cli.exec", { argv, timeout: 240 });
-          const out = (r && r.result) || r || {};
-          const stdout = out.output || out.stdout || "";
-          const jsonLine = stdout.split("\n").find((l) => l.trim().startsWith("{"));
-          if (!jsonLine) throw new Error("Backend unavailable: " + String(stdout).slice(0, 160));
-          const parsed = JSON.parse(jsonLine);
-          if (parsed.error) throw new Error(parsed.error);
-          const evs = (parsed.events || []).filter((e) => e.event === "delta").map((e) => e.data).join("");
-          const doneEv = (parsed.events || []).find((e) => e.event === "done");
-          const finalText = (doneEv && doneEv.data && doneEv.data.text) || evs;
-          setOut({ status: "done", text: finalText || "", error: "", sources: (doneEv && doneEv.data && doneEv.data.sources) || [] });
-          return;
-        }
-        if (!res.ok || !res.body) {
-          throw new Error("Backend returned HTTP " + res.status);
-        }
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        let acc = "";
-        let sources = [];
-        let finished = false;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          let idx;
-          while ((idx = buf.indexOf("\n\n")) !== -1) {
-            const frame = buf.slice(0, idx);
-            buf = buf.slice(idx + 2);
-            const ev = (frame.match(/^event: (.+)$/m) || [])[1] || "";
-            const data = (frame.match(/^data: (.+)$/m) || [])[1] || "";
-            if (!data) continue;
-            let j;
-            try { j = JSON.parse(data); } catch { continue; }
-            if (ev === "delta" && typeof j === "string") {
-              acc += j;
-              setOut({ status: "streaming", text: acc, error: "", sources });
-            } else if (ev === "sources") {
-              sources = j;
-              setOut({ status: "streaming", text: acc, error: "", sources });
-            } else if (ev === "done") {
-              acc = j.text || acc;
-              sources = j.sources || sources;
-              finished = true;
-              setOut({ status: "done", text: acc, error: "", sources });
-            } else if (ev === "error") {
-              throw new Error(typeof j === "string" ? j : String(j));
-            }
-          }
-        }
-        if (acc && !finished) setOut({ status: "done", text: acc, error: "", sources });
+        const r = await Promise.race([execP, aborted]);
+        const out = (r && r.result) || r || {};
+        const stdout = out.output || out.stdout || "";
+        const jsonLine = stdout.split("\n").find((l) => l.trim().startsWith("{"));
+        if (!jsonLine) throw new Error("Backend unavailable: " + String(stdout).slice(0, 160));
+        const parsed = JSON.parse(jsonLine);
+        if (parsed.error) throw new Error(parsed.error);
+        const evs = (parsed.events || []).filter((e) => e.event === "delta").map((e) => e.data).join("");
+        const doneEv = (parsed.events || []).find((e) => e.event === "done");
+        const finalText = (doneEv && doneEv.data && doneEv.data.text) || evs;
+        setOut({ status: "done", text: finalText || "", error: "", sources: (doneEv && doneEv.data && doneEv.data.sources) || [] });
       } catch (e) {
         if (e && e.name === "AbortError") return;
         setOut({ status: "error", text: "", error: friendlyError(e), sources: [] });
@@ -1130,12 +1026,6 @@ function DefsPane({ onClose }) {
     termAtom.set(t);
     requestIdAtom.set(requestIdAtom.get() + 1);
     run(t);
-  };
-
-  const clearKeys = () => {
-    patchSettings({
-      providers: settings.providers.map((p) => ({ ...p, api_key: "" })),
-    });
   };
 
   const applyImport = () => {
@@ -1525,11 +1415,6 @@ function DefsPane({ onClose }) {
                 onChange: (e) => setNewProvider({ ...newProvider, base_url: e.target.value }),
               }),
               React.createElement(Input, {
-                className: "h-7 text-xs", type: "password", placeholder: "API key (optional)",
-                value: newProvider.api_key,
-                onChange: (e) => setNewProvider({ ...newProvider, api_key: e.target.value }),
-              }),
-              React.createElement(Input, {
                 className: "h-7 text-xs", placeholder: "Models (comma-separated)",
                 value: newProvider.models,
                 onChange: (e) => setNewProvider({ ...newProvider, models: e.target.value }),
@@ -1546,7 +1431,7 @@ function DefsPane({ onClose }) {
                     patchSettings({
                       providers: [
                         ...settings.providers,
-                        { id: "p" + Date.now().toString(36), name, base_url: base, api_key: (newProvider.api_key || "").trim(), models, default_model: models[0] || "" },
+                        { id: "p" + Date.now().toString(36), name, base_url: base, models, default_model: models[0] || "" },
                       ],
                     });
                     setNewProvider(null);
@@ -1557,9 +1442,8 @@ function DefsPane({ onClose }) {
             ),
           React.createElement(
             "div", { style: rowStyle },
-            React.createElement(Button, { size: "sm", variant: "outline", onClick: () => setNewProvider({ name: "", base_url: "", api_key: "", models: "" }) },
+            React.createElement(Button, { size: "sm", variant: "outline", onClick: () => setNewProvider({ name: "", base_url: "", models: "" }) },
               React.createElement(Codicon, { name: "add", size: 12 }), " Add"),
-            React.createElement(Button, { size: "sm", variant: "ghost", onClick: clearKeys }, "Clear keys"),
             React.createElement(Button, {
               size: "sm", variant: "ghost",
               onClick: () => {
@@ -1576,7 +1460,7 @@ function DefsPane({ onClose }) {
                 className: "h-24 text-xs font-mono",
                 value: importText,
                 onChange: (e) => setImportText(e.target.value),
-                placeholder: '[{"name":"…","base_url":"…","api_key":"…","models":["…"]}]',
+                placeholder: '[{"name":"…","base_url":"…","models":["…"]}]',
               }),
               React.createElement(Button, { size: "sm", onClick: applyImport }, "Apply import")
             )

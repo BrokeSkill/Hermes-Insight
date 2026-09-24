@@ -1,4 +1,4 @@
-name: insight-backend
+name: hermes-insight
 version: 1.0.0
 description: "insight backend - stateless completion (no memory, no skills, no tools) + provider list + web search. Driven by the Selection Definition renderer plugin via `hermes insight ...`."
 author: BrokeSkill

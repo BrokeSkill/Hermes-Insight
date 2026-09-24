@@ -8,11 +8,10 @@ import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-RENDERER_SRC = SCRIPT_DIR / "renderer-plugin" / "plugin.js"
-BACKEND_FILES = ["__init__.py", "plugin.yaml"]
+BACKEND_SRC = SCRIPT_DIR / "backend-plugin"
+BACKEND_FILES = ["__init__.py", "plugin.yaml", "desktop/plugin.js"]
 
-PLUGIN_ID = "insight"
-BACKEND_ID = "insight-backend"
+PLUGIN_ID = "hermes-insight"
 
 
 def is_windows():
@@ -23,31 +22,19 @@ def _local_app_data():
     return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
 
 
-def desktop_plugins_dir():
-    if is_windows():
-        return _local_app_data() / "hermes" / "desktop-plugins"
-    xdg = os.environ.get("XDG_DATA_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
-    return base / "hermes" / "desktop-plugins"
-
-
 def gateway_plugins_dir():
     if is_windows():
         return _local_app_data() / "hermes" / "plugins"
     return Path.home() / ".hermes" / "plugins"
 
 
-def plugin_targets(desktop_dir, gateway_dir):
-    renderer = desktop_dir / PLUGIN_ID / "plugin.js"
-    backend = [gateway_dir / BACKEND_ID / n for n in BACKEND_FILES]
-    return renderer, backend
+def plugin_targets(gateway_dir):
+    return [gateway_dir / PLUGIN_ID / n for n in BACKEND_FILES]
 
 
-def check_install(desktop_dir, gateway_dir):
-    renderer, backend = plugin_targets(desktop_dir, gateway_dir)
-    targets = [renderer] + backend
-    found = [p for p in targets if p.exists()]
-    return found, [p for p in targets if not p.exists()]
+def check_install(gateway_dir):
+    targets = plugin_targets(gateway_dir)
+    return [p for p in targets if p.exists()], [p for p in targets if not p.exists()]
 
 
 def _copy(src, dst):
@@ -56,21 +43,15 @@ def _copy(src, dst):
     print(f"  copied {src.name} -> {dst}")
 
 
-def install_renderer(desktop_dir):
-    print(f"\nRenderer plugin -> {desktop_dir}")
-    target = desktop_dir / PLUGIN_ID / "plugin.js"
-    _copy(RENDERER_SRC, target)
-
-
 def install_backend(gateway_dir):
     print(f"\nBackend plugin -> {gateway_dir}")
-    target_dir = gateway_dir / BACKEND_ID
+    target_dir = gateway_dir / PLUGIN_ID
     for name in BACKEND_FILES:
-        _copy(SCRIPT_DIR / "backend-plugin" / name, target_dir / name)
+        _copy(BACKEND_SRC / name, target_dir / name)
 
 
 def enable_backend(no_enable):
-    print(f"\nEnabling '{BACKEND_ID}'...")
+    print(f"\nEnabling '{PLUGIN_ID}'...")
     if no_enable:
         print("  skipped (--no-enable)")
         return
@@ -78,27 +59,23 @@ def enable_backend(no_enable):
     if not exe:
         print(
             "  'hermes' CLI not found on PATH - skipped. "
-            "Add 'insight-backend' to the plugins.enabled list in config.yaml instead."
+            f"Add '{PLUGIN_ID}' to the plugins.enabled list in config.yaml instead."
         )
         return
     try:
-        subprocess.run([exe, "plugins", "enable", BACKEND_ID], check=True)
-        print(f"  enabled '{BACKEND_ID}'")
+        subprocess.run([exe, "plugins", "enable", PLUGIN_ID], check=True)
+        print(f"  enabled '{PLUGIN_ID}'")
     except subprocess.CalledProcessError as e:
-        print(f"  'hermes plugins enable {BACKEND_ID}' failed (exit {e.returncode}).")
-        print("  Add 'insight-backend' to the plugins.enabled list in config.yaml instead.")
+        print(f"  'hermes plugins enable {PLUGIN_ID}' failed (exit {e.returncode}).")
+        print(f"  Add '{PLUGIN_ID}' to the plugins.enabled list in config.yaml instead.")
     except OSError as e:
         print(f"  could not run 'hermes' ({e}).")
-        print("  Add 'insight-backend' to the plugins.enabled list in config.yaml instead.")
+        print(f"  Add '{PLUGIN_ID}' to the plugins.enabled list in config.yaml instead.")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Install the Insight plugin (renderer + backend) for Hermes Desktop."
-    )
-    parser.add_argument(
-        "--desktop-plugins", metavar="DIR",
-        help="Hermes Desktop plugins folder (default: auto-detected per platform)",
+        description="Install the Insight plugin (backend + desktop half) for Hermes."
     )
     parser.add_argument(
         "--plugins", metavar="DIR",
@@ -106,7 +83,7 @@ def main():
     )
     parser.add_argument(
         "--no-enable", action="store_true",
-        help="Copy the files but do not run 'hermes plugins enable insight-backend'",
+        help="Copy the files but do not run 'hermes plugins enable hermes-insight'",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -118,23 +95,21 @@ def main():
     )
     args = parser.parse_args()
 
-    desktop = Path(args.desktop_plugins) if args.desktop_plugins else desktop_plugins_dir()
     gateway = Path(args.plugins) if args.plugins else gateway_plugins_dir()
 
     print(f"Platform: {'Windows' if is_windows() else sys.platform}")
     print(f"Source:   {SCRIPT_DIR}")
 
-    missing = [str(p) for p in ([RENDERER_SRC] + [SCRIPT_DIR / "backend-plugin" / n for n in BACKEND_FILES]) if not p.exists()]
+    missing = [str(p) for p in (BACKEND_SRC / n for n in BACKEND_FILES) if not p.exists()]
     if missing:
         print("\nERROR: missing plugin source files:")
         for m in missing:
             print(f"  {m}")
         sys.exit(1)
 
-    print(f"Renderer target: {desktop}")
-    print(f"Backend target:  {gateway}")
+    print(f"Backend target: {gateway}")
 
-    found, not_found = check_install(desktop, gateway)
+    found, not_found = check_install(gateway)
     total = len(found) + len(not_found)
     if found:
         print(f"\nExisting installation detected ({len(found)} of {total} files already in place):")
@@ -144,11 +119,10 @@ def main():
             print("  (partially installed - missing files will be added)")
 
     if args.dry_run:
-        print(f"\nDry run - would copy:")
-        print(f"  {RENDERER_SRC} -> {desktop / PLUGIN_ID / 'plugin.js'}")
+        print("\nDry run - would copy:")
         for name in BACKEND_FILES:
-            print(f"  {SCRIPT_DIR / 'backend-plugin' / name} -> {gateway / BACKEND_ID / name}")
-        print("  then run: hermes plugins enable insight-backend")
+            print(f"  {BACKEND_SRC / name} -> {gateway / PLUGIN_ID / name}")
+        print(f"  then run: hermes plugins enable {PLUGIN_ID}")
         return
 
     if len(found) == total and not args.force:
@@ -157,12 +131,11 @@ def main():
             print("Skipping. Nothing was changed.")
             return
 
-    install_renderer(desktop)
     install_backend(gateway)
     enable_backend(args.no_enable)
 
     print("\nVerifying installation...")
-    found, not_found = check_install(desktop, gateway)
+    found, not_found = check_install(gateway)
     for p in found:
         print(f"  ok  {p}")
     if not_found:
@@ -171,10 +144,9 @@ def main():
             print(f"  {p}")
         sys.exit(1)
 
-    print("\n  1. Restart Hermes Desktop / reload desktop plugins.")
-    print("  2. Restart the gateway: hermes gateway restart (if it was already running).")
+    print("\n  1. Restart the gateway: hermes gateway restart (if it was already running).")
+    print("  2. Reload desktop plugins / restart Hermes Desktop.")
     print("  3. Verify:")
-    print("       hermes insight --sse-url")
     print("       hermes insight --list-providers")
 
     print("\nInsight has been successfully installed, thank you for downloading!")

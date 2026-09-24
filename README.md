@@ -21,7 +21,7 @@ format template as the only system instruction, reasoning off.
   install config, does web search honoring `web.search_backend`, and streams
   the completion.
 
-Plugin ids: `insight` (renderer), `insight-backend` (backend).
+Plugin ids: `hermes-insight` (backend, ships the desktop half at `backend-plugin/desktop/plugin.js`).
 
 ---
 
@@ -39,67 +39,47 @@ Select any text in Hermes Desktop and a small popup appears with two actions:
 ---
 
 ## Installation
-```git clone https://github.com/BrokeSkill/Insight```
 
-# Automatic
-### Hermes Install (paste this into a Hermes Session)
-```
-Clone the GitHub repository located at https://github.com/BrokeSkill/Insight and follow the installation instructions outlined in the README.md file. Ensure that both the renderer and the backend are installed completely and correctly.
-```
-OR
-### Run automated install script
-(automatically checks your OS and install directory)
+The plugin is in the [Hermes plugin catalog](https://github.com/NousResearch/hermes-agent/tree/main/plugin-catalog) as `hermes-insight`; one install ships both the backend and the desktop half:
+
 ```bash
-python install.py
+hermes plugins install BrokeSkill/Hermes-Insight/backend-plugin
+hermes plugins enable hermes-insight
 ```
 
-# Manual
-### 1. Renderer plugin (where Hermes Desktop runs)
+(From the catalog: `hermes plugins install hermes-insight` + `hermes plugins enable hermes-insight`.)
 
-1. Find your Hermes desktop plugins folder:
-   `%LOCALAPPDATA%\hermes\desktop-plugins\`
-2. Create a folder for the plugin and copy the renderer file into it:
+### Manual
 
-   ```
-   desktop-plugins\insight\plugin.js
-   ```
-
-3. Restart Hermes Desktop / Reload Desktop Plugins.
-
-### 2. Backend plugin (the gateway host)
-
-1. Find your Hermes plugins folder: `~/.hermes/plugins/` (Linux) or
-   `%LOCALAPPDATA%\hermes\plugins\` (Windows).
-2. Create the backend plugin folder and copy both files into it:
+1. Copy `backend-plugin/` to `~/.hermes/plugins/hermes-insight/` (Linux) or
+   `%LOCALAPPDATA%\hermes\plugins\hermes-insight\` (Windows):
 
    ```
-   plugins\insight-backend\
+   plugins\hermes-insight\
        __init__.py      ← copy from backend-plugin/__init__.py
        plugin.yaml      ← copy from backend-plugin/plugin.yaml
+       desktop\plugin.js ← copy from backend-plugin/desktop/plugin.js
    ```
 
-3. Enable it:
+2. Enable it:
 
    ```bash
-   hermes plugins enable insight-backend
+   hermes plugins enable hermes-insight
    ```
 
-   OR add `insight-backend` to the `plugins.enabled` list in
+   OR add `hermes-insight` to the `plugins.enabled` list in
    `config.yaml` next to any existing entries.
 
-4. Restart the gateway (`hermes gateway restart`).
+3. Restart the gateway (`hermes gateway restart`) and reload desktop plugins.
 
-### 3. Verify
+### Verify
 
 ```bash
-hermes insight --sse-url           # prints the streaming endpoint
 hermes insight --list-providers    # prints every provider from your config
 ```
 
-The renderer discovers the endpoint automatically (`--sse-url`), so no manual
-URL config is needed. If the panel's SSE fetch fails (e.g. the gateway started
-before the plugin existed), the CLI command spawns a detached daemon that owns
-the streaming server, so it works even without a gateway restart.
+The desktop half talks to the backend only through `cli.exec` (`hermes insight
+...`), so no server, URL, or daemon is involved.
 
 ---
 
@@ -109,22 +89,20 @@ the streaming server, so it works even without a gateway restart.
 
 1. You select text in Hermes Desktop → a small popup appears with **Respond**
    and **Define**.
-2. **Respond** quotes the selection into the composer (`> ...`).
+2. **Respond** quotes the selection into the composer (`> ...`) through the
+   SDK's composer surface (`host.composer.insertText`).
    **Define** asks the gateway for the provider list once (`model.options`)
-   and streams the completion over SSE from the backend's HTTP server (bound
-   on the gateway host).
+   and runs the completion through `cli.exec` (`hermes insight --term ...`).
 3. The backend (optional) runs a web search via `web.search_backend`, attaches
    images, then posts a **stateless** chat completion to the chosen provider:
    - system message = **the format template only** (no memory, no skills, no agent)
    - `reasoning_effort: none` for OpenAI-compatible/local proxies.
    - **no tools** - definitions cite the search sources inline instead
-4. The response streams into the panel token by token; sources render with
-   citations and images.
+4. The result renders in the panel with sources, citations and images.
 
-**Streaming server:** a small stdlib HTTP server (`0.0.0.0:8643`, SSE). If the
-gateway process predates the plugin install, the CLI command spawns a detached
-daemon that hosts it, so streaming works across machines without a gateway
-restart.
+No server, no daemon: the desktop half talks to the backend only through the
+SDK's `cli.exec` door, so nothing listens on any port and nothing outlives the
+CLI invocation.
 
 ---
 
