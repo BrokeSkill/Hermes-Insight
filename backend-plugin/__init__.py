@@ -1,4 +1,4 @@
-import argparse, json, os, sys
+import argparse, base64, json, os, sys
 
 _payload_cache = None
 
@@ -72,18 +72,83 @@ def _list_providers():
     } for r in _payload().get("providers") or []]
 
 
+def _searxng_rows(term, limit=5):
+    try:
+        import httpx
+        import yaml
+        url = ""
+        p = os.path.expanduser("~/.hermes/config.yaml")
+        if os.path.exists(p):
+            with open(p) as f:
+                url = str(((yaml.safe_load(f) or {}).get("web") or {}).get("searxng_url") or "")
+        url = (url or os.environ.get("SEARXNG_URL") or "").rstrip("/")
+        if not url:
+            return []
+        r = httpx.get(url + "/search", params={"q": term, "format": "json"}, timeout=10.0)
+        pool = []
+        for x in (r.json().get("results") or []):
+            link = x.get("url") or ""
+            if not link:
+                continue
+            pool.append({
+                "title": x.get("title") or "",
+                "url": link,
+                "content": (x.get("content") or "")[:300],
+                "image": x.get("thumbnail") or x.get("img_src") or "",
+            })
+        with_img = [p for p in pool if p["image"] and not _is_listing(p["url"])]
+        picked = []
+        for p in with_img + [p for p in pool if p not in with_img]:
+            if len(picked) >= limit:
+                break
+            picked.append(p)
+        return picked
+    except Exception:
+        return []
+
+
+def _is_listing(url):
+    u = str(url or "").lower()
+    return any(t in u for t in ("/s?", "/search", "/suche", "/suchergebnis", "?k=", "/results", "/catalogsearch"))
+
+
+def _inline_image(url):
+    try:
+        import httpx
+        if not str(url).lower().startswith(("http://", "https://")):
+            return ""
+        r = httpx.get(url, timeout=8.0, follow_redirects=True)
+        if r.status_code != 200:
+            return ""
+        mime = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if not mime.startswith("image/") or len(r.content) > 400000:
+            return ""
+        return "data:" + mime + ";base64," + base64.b64encode(r.content).decode()
+    except Exception:
+        return ""
+
+
 def _search(term):
     from tools.web_tools import web_search_tool
     try:
         data = json.loads(web_search_tool(term, limit=4))
     except Exception:
-        return []
-    return [{
+        data = {}
+    rows = [{
         "title": x.get("title") or "",
         "url": x.get("url") or x.get("href") or "",
         "content": (x.get("description") or x.get("snippet") or "")[:300],
         "image": x.get("image") or x.get("img_src") or x.get("thumbnail") or "",
     } for x in ((data.get("data") or {}).get("web") or [])[:5]]
+    if not any(r["image"] for r in rows):
+        rows = _searxng_rows(term) or rows
+    for r in rows:
+        if r["image"] and _is_listing(r["url"]):
+            r["image"] = ""
+    for r in rows:
+        if r["image"]:
+            r["image"] = _inline_image(r["image"])
+    return rows
 
 
 def _extract(url):
@@ -123,7 +188,9 @@ def _session_runtime(session_id):
 
 
 def _stream_complete(term, template, provider, model, session_id, do_search, emit):
-    sources = _search(term)[:2] if do_search else []
+    found = _search(term) if do_search else []
+    found.sort(key=lambda s: not s.get("image"))
+    sources = found[:2]
     if sources:
         emit("sources", sources)
 
@@ -132,6 +199,7 @@ def _stream_complete(term, template, provider, model, session_id, do_search, emi
     ctx = "\n".join(f"[{i+1}] {s['title']} — {s['url']}" for i, s in enumerate(sources) if s.get("url"))
     if ctx:
         user_prompt += "\n\nSearch results (cite EXACTLY TWO of them inline like [1], [2] — never more, never invented sources):\n" + ctx
+        user_prompt += "\nThe app attaches a source image automatically when one is available. Do not embed a markdown image."
 
     provider_name = provider
     if provider:

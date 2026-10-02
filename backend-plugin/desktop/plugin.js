@@ -22,7 +22,7 @@ import {
   PALETTE_AREA,
 } from "@hermes/plugin-sdk";
 
-const { useEffect, useState, useRef, useCallback } = React;
+const { useEffect, useLayoutEffect, useState, useRef, useCallback } = React;
 
 const FENCE = "```";
 const PREFIX = "> ";
@@ -779,11 +779,32 @@ async function fetchGatewayModels() {
   return gatewayModelsCache;
 }
 
+function ensurePopupStyles() {
+  if (document.getElementById("insight-popup-styles")) return;
+  const s = document.createElement("style");
+  s.id = "insight-popup-styles";
+  s.textContent =
+    `@keyframes insight-popup-in{from{opacity:0;translate:0 5px;scale:.96}to{opacity:1;translate:0 0;scale:1}}` +
+    `.insight-popup{--insight-surface:color-mix(in srgb,var(--ui-bg-elevated) 92%,transparent);` +
+    `background:var(--insight-surface);color:var(--ui-text-primary);` +
+    `border:1px solid var(--ui-stroke-secondary);border-radius:var(--radius-lg);` +
+    `box-shadow:var(--shadow-nous);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);` +
+    `animation:insight-popup-in .12s ease-out;transform-origin:bottom center}` +
+    `.insight-popup-arrow{position:absolute;bottom:-6px;left:50%;width:16px;height:7px;` +
+    `transform:translateX(-50%);background:var(--insight-surface);` +
+    `clip-path:polygon(0 0,100% 0,50% 100%)}` +
+    `.insight-popup-sep{width:1px;align-self:stretch;margin:3px 1px;background:var(--ui-stroke-secondary)}`;
+  document.head.appendChild(s);
+}
+
 function SelectionPopupHost() {
   const [popup, setPopup] = useState(null);
+  const [dx, setDx] = useState(0);
+  const popupRef = useRef(null);
   const panelOpen = useValue(panelOpenAtom);
 
   useEffect(() => {
+    ensurePopupStyles();
     const onMouseUp = () => {
       const frag = currentSelectionFragment();
       if (!frag) { setPopup(null); return; }
@@ -791,6 +812,7 @@ function SelectionPopupHost() {
       if (!md.trim()) { setPopup(null); return; }
       const r = window.getSelection().getRangeAt(0).getBoundingClientRect();
       setPopup({ x: r.left + r.width / 2, y: r.top, md });
+      setDx(0);
     };
     const onSelChange = () => {
       if (window.getSelection().isCollapsed) setPopup(null);
@@ -806,53 +828,44 @@ function SelectionPopupHost() {
         setPopup(null);
       }
     };
+    const onScroll = () => setPopup(null);
 
     document.addEventListener("mouseup", onMouseUp);
     document.addEventListener("selectionchange", onSelChange);
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("scroll", onScroll, true);
 
     return () => {
       document.removeEventListener("mouseup", onMouseUp);
       document.removeEventListener("selectionchange", onSelChange);
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("scroll", onScroll, true);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    if (!popup || !popupRef.current) return;
+    const half = popupRef.current.offsetWidth / 2 + 8;
+    const limit = Math.max(half, window.innerWidth - half);
+    setDx(Math.min(Math.max(popup.x, half), limit) - popup.x);
+  }, [popup]);
 
   const quoted = popup ? buildQuote(popup.md) : "";
   const popupStyle = popup
     ? {
         position: "fixed",
-        left: popup.x + "px",
-        top: Math.max(8, popup.y - 8) + "px",
+        left: popup.x + dx + "px",
+        top: Math.max(8, popup.y - 12) + "px",
         transform: "translate(-50%, -100%)",
         zIndex: 130,
         display: "flex",
         alignItems: "center",
-        gap: "4px",
-        padding: "4px",
-        background: "var(--popover-surface, var(--popover, var(--background, #fff)))",
-        color: "var(--popover-foreground, var(--foreground, #1c1c1e))",
-        border: "1px solid var(--ui-stroke-secondary, var(--border, rgba(128,128,128,.28)))",
-        borderRadius: "var(--radius-lg, var(--radius, 0.625rem))",
-        boxShadow: "0 8px 24px -12px color-mix(in srgb, #000 24%, transparent)",
-        fontFamily: "var(--font-sans, inherit)",
-        fontSize: "var(--conversation-text-font-size, 0.8125rem)",
-        backdropFilter: "blur(8px)",
-        WebkitBackdropFilter: "blur(8px)",
+        gap: "2px",
+        padding: "3px",
       }
     : {};
-  const btnBase = {
-    border: 0,
-    cursor: "pointer",
-    padding: "3px 10px",
-    borderRadius: "6px",
-    font: "inherit",
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "4px",
-  };
 
   return React.createElement(
     React.Fragment,
@@ -862,31 +875,35 @@ function SelectionPopupHost() {
         "div",
         {
           "data-insight": "1",
+          ref: popupRef,
+          className: "insight-popup",
           style: popupStyle,
           onMouseDown: (e) => e.stopPropagation(),
         },
+        React.createElement("span", { key: "arrow", className: "insight-popup-arrow" }),
         React.createElement(
-          "button",
+          Button,
           {
-            style: { ...btnBase, background: "var(--primary, #0053fd)", color: "var(--primary-foreground, #fff)" },
-            onClick: () => { insertQuoteIntoComposer(quoted); setPopup(null); },
+            key: "respond",
+            size: "sm",
+            variant: "default",
             title: "Insert as quoted response",
+            onClick: () => { insertQuoteIntoComposer(quoted); setPopup(null); },
           },
+          React.createElement(Codicon, { name: "reply", size: 13 }),
           "Respond"
         ),
+        React.createElement("span", { key: "sep", className: "insight-popup-sep" }),
         React.createElement(
-          "button",
+          Button,
           {
-            style: {
-              ...btnBase,
-              background: "var(--popover-surface, transparent)",
-              color: "var(--popover-foreground, inherit)",
-              border: "1px solid var(--ui-stroke-secondary, var(--border))",
-            },
-            onClick: () => { setPopup(null); defineSelection(); },
+            key: "define",
+            size: "sm",
+            variant: "ghost",
             title: "Define in the side panel",
+            onClick: () => { setPopup(null); defineSelection(); },
           },
-          React.createElement(Codicon, { name: "book", size: 14 }),
+          React.createElement(Codicon, { name: "book", size: 13 }),
           "Define"
         )
       ),
