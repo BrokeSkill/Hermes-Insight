@@ -14,7 +14,8 @@ def _payload():
 def _prov_cfg(slug):
     try:
         import yaml
-        p = os.path.expanduser("~/.hermes/config.yaml")
+        from hermes_constants import get_hermes_home
+        p = get_hermes_home() / "config.yaml"
         if os.path.exists(p):
             with open(p) as f:
                 return ((yaml.safe_load(f) or {}).get("providers") or {}).get(slug) or {}
@@ -76,8 +77,9 @@ def _searxng_rows(term, limit=5):
     try:
         import httpx
         import yaml
+        from hermes_constants import get_hermes_home
         url = ""
-        p = os.path.expanduser("~/.hermes/config.yaml")
+        p = get_hermes_home() / "config.yaml"
         if os.path.exists(p):
             with open(p) as f:
                 url = str(((yaml.safe_load(f) or {}).get("web") or {}).get("searxng_url") or "")
@@ -115,15 +117,30 @@ def _is_listing(url):
 def _inline_image(url):
     try:
         import httpx
-        if not str(url).lower().startswith(("http://", "https://")):
-            return ""
-        r = httpx.get(url, timeout=8.0, follow_redirects=True)
-        if r.status_code != 200:
-            return ""
-        mime = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
-        if not mime.startswith("image/") or len(r.content) > 400000:
-            return ""
-        return "data:" + mime + ";base64," + base64.b64encode(r.content).decode()
+        from urllib.parse import urljoin
+        from tools.url_safety import is_safe_url
+        for _ in range(4):
+            if not is_safe_url(url):
+                return ""
+            with httpx.stream("GET", url, timeout=6.0, follow_redirects=False) as r:
+                if r.is_redirect:
+                    loc = r.headers.get("location") or ""
+                    if not loc:
+                        return ""
+                    url = urljoin(url, loc)
+                    continue
+                if r.status_code != 200:
+                    return ""
+                mime = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+                if not mime.startswith("image/"):
+                    return ""
+                buf = b""
+                for chunk in r.iter_bytes():
+                    buf += chunk
+                    if len(buf) > 400000:
+                        return ""
+                return "data:" + mime + ";base64," + base64.b64encode(buf).decode()
+        return ""
     except Exception:
         return ""
 
@@ -145,9 +162,12 @@ def _search(term):
     for r in rows:
         if r["image"] and _is_listing(r["url"]):
             r["image"] = ""
-    for r in rows:
-        if r["image"]:
-            r["image"] = _inline_image(r["image"])
+    targets = [i for i, r in enumerate(rows) if r["image"]]
+    if targets:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(targets)) as ex:
+            for i, data in zip(targets, ex.map(lambda i: _inline_image(rows[i]["image"]), targets)):
+                rows[i]["image"] = data
     return rows
 
 
