@@ -736,6 +736,32 @@ function friendlyError(e) {
 
 const SESSION_MODEL = "__session__";
 
+// Fix for Issue #1: links open via ctx.os.openExternal, since a bare
+// target="_blank" is denied by the desktop window-open policy.
+let _os = null;
+
+function openExternalUrl(url) {
+  const u = String(url || "").trim();
+  if (!u) return;
+  const os = _os || window.hermesDesktop || null;
+  if (os && typeof os.openExternal === "function") {
+    try {
+      const r = os.openExternal(u);
+      if (r && typeof r.catch === "function") r.catch(() => { });
+    } catch (z) { }
+    return;
+  }
+  window.open(u, "_blank", "noopener,noreferrer");
+}
+
+function onPanelClick(e) {
+  const a = e && e.target && e.target.closest ? e.target.closest("a[href]") : null;
+  if (!a) return;
+  e.preventDefault();
+  e.stopPropagation();
+  openExternalUrl(a.getAttribute("href"));
+}
+
 let gatewayModelsCache = null;
 
 async function fetchGatewayModels() {
@@ -1130,7 +1156,7 @@ function DefsPane({ onClose }) {
 
   return React.createElement(
     "div",
-    { style: rootStyle, className: "p-3" },
+    { style: rootStyle, className: "p-3", onClick: onPanelClick },
     React.createElement(
       "div",
       { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 } },
@@ -1160,12 +1186,15 @@ function DefsPane({ onClose }) {
       "div",
       { style: { ...rowStyle, marginTop: 8, flexWrap: "wrap" } },
       React.createElement(Select, {
-        value: settings.last.providerId || (selProvider && selProvider.id) || "",
+        value: settings.last.providerId || SESSION_MODEL,
         onValueChange: (v) => patchSettings({ last: { ...settings.last, providerId: v, model: "" } }),
       },
         React.createElement(SelectTrigger, { className: "w-[150px] h-7 text-xs" },
           React.createElement(SelectValue, { placeholder: "Provider (gateway list)" })),
         React.createElement(SelectContent, null,
+          // Fix for Issue #2: the way back to following the session model.
+          React.createElement(SelectItem, { key: SESSION_MODEL, value: SESSION_MODEL },
+            "Default (follow main model)"),
           providerList.length === 0 &&
             React.createElement(SelectItem, { value: "__none__", disabled: true },
               gwModelsError || "Loading gateway provider list…"),
@@ -1532,6 +1561,7 @@ export default {
   defaultEnabled: true,
   register(ctx) {
     _storage = ctx.storage;
+    _os = (ctx && ctx.os) || null;
     settingsAtom.set(loadSettings(ctx.storage));
 
     ctx.register({
