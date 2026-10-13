@@ -743,15 +743,18 @@ let _os = null;
 function openExternalUrl(url) {
   const u = String(url || "").trim();
   if (!u) return;
-  const os = _os || window.hermesDesktop || null;
-  if (os && typeof os.openExternal === "function") {
+  const viaWindow = () => window.open(u, "_blank", "noopener,noreferrer");
+  if (_os && typeof _os.openExternal === "function") {
     try {
-      const r = os.openExternal(u);
-      if (r && typeof r.catch === "function") r.catch(() => { });
+      const r = _os.openExternal(u);
+      if (r && typeof r.then === "function") {
+        r.then((ok) => { if (!ok) viaWindow(); }, viaWindow);
+        return;
+      }
+      if (r !== false) return;
     } catch (z) { }
-    return;
   }
-  window.open(u, "_blank", "noopener,noreferrer");
+  viaWindow();
 }
 
 function onPanelClick(e) {
