@@ -767,14 +767,11 @@ function onPanelClick(e) {
 
 let gatewayModelsCache = null;
 
-// cli.exec runs inside the gateway process, whose HERMES_HOME is the launch
-// (default) profile — not the profile this desktop session is bound to. Prefix
-// `-p <session profile>` so plugin/config/key resolution follows the session
-// profile, where the backend plugin is actually installed. No-op for default.
 function sessionProfilePrefix() {
   try {
-    const p = host && host.state && host.state.profile && typeof host.state.profile.get === "function"
-      ? host.state.profile.get() : "";
+    const state = (host && host.state) || {};
+    const read = (atom) => (atom && typeof atom.get === "function" ? atom.get() : "");
+    const p = String(read(state.focusedSessionProfile) || read(state.profile) || "").trim();
     if (p && p !== "default") return ["-p", p];
   } catch { }
   return [];
