@@ -767,6 +767,19 @@ function onPanelClick(e) {
 
 let gatewayModelsCache = null;
 
+// cli.exec runs inside the gateway process, whose HERMES_HOME is the launch
+// (default) profile — not the profile this desktop session is bound to. Prefix
+// `-p <session profile>` so plugin/config/key resolution follows the session
+// profile, where the backend plugin is actually installed. No-op for default.
+function sessionProfilePrefix() {
+  try {
+    const p = host && host.state && host.state.profile && typeof host.state.profile.get === "function"
+      ? host.state.profile.get() : "";
+    if (p && p !== "default") return ["-p", p];
+  } catch { }
+  return [];
+}
+
 async function fetchGatewayModels() {
   if (gatewayModelsCache) return gatewayModelsCache;
   let providers = [];
@@ -784,7 +797,7 @@ async function fetchGatewayModels() {
   } catch { }
   if (!providers.length && host && typeof host.request === "function") {
     try {
-      const r = await host.request("cli.exec", { argv: ["insight", "--list-providers"], timeout: 30 });
+      const r = await host.request("cli.exec", { argv: [...sessionProfilePrefix(), "insight", "--list-providers"], timeout: 30 });
       const out = (r && r.result) || r || {};
       const stdout = out.output || out.stdout || "";
       const line = stdout.split("\n").find((l) => l.trim().startsWith("{"));
@@ -1025,7 +1038,7 @@ function DefsPane({ onClose }) {
 
     (async () => {
       try {
-        const argv = ["insight", "--term", termText, "--template", settings.template || "",
+        const argv = [...sessionProfilePrefix(), "insight", "--term", termText, "--template", settings.template || "",
                       "--search", settings.search.enabled ? "1" : "0"];
         if (settings.last.providerId && settings.last.providerId !== SESSION_MODEL) argv.push("--provider", settings.last.providerId);
         if (settings.last.model && settings.last.model !== SESSION_MODEL) argv.push("--model", settings.last.model);
