@@ -767,6 +767,16 @@ function onPanelClick(e) {
 
 let gatewayModelsCache = null;
 
+function sessionProfilePrefix() {
+  try {
+    const state = (host && host.state) || {};
+    const read = (atom) => (atom && typeof atom.get === "function" ? atom.get() : "");
+    const p = String(read(state.focusedSessionProfile) || read(state.profile) || "").trim();
+    if (p && p !== "default") return ["-p", p];
+  } catch { }
+  return [];
+}
+
 async function fetchGatewayModels() {
   if (gatewayModelsCache) return gatewayModelsCache;
   let providers = [];
@@ -784,7 +794,7 @@ async function fetchGatewayModels() {
   } catch { }
   if (!providers.length && host && typeof host.request === "function") {
     try {
-      const r = await host.request("cli.exec", { argv: ["insight", "--list-providers"], timeout: 30 });
+      const r = await host.request("cli.exec", { argv: [...sessionProfilePrefix(), "insight", "--list-providers"], timeout: 30 });
       const out = (r && r.result) || r || {};
       const stdout = out.output || out.stdout || "";
       const line = stdout.split("\n").find((l) => l.trim().startsWith("{"));
@@ -1025,7 +1035,7 @@ function DefsPane({ onClose }) {
 
     (async () => {
       try {
-        const argv = ["insight", "--term", termText, "--template", settings.template || "",
+        const argv = [...sessionProfilePrefix(), "insight", "--term", termText, "--template", settings.template || "",
                       "--search", settings.search.enabled ? "1" : "0"];
         if (settings.last.providerId && settings.last.providerId !== SESSION_MODEL) argv.push("--provider", settings.last.providerId);
         if (settings.last.model && settings.last.model !== SESSION_MODEL) argv.push("--model", settings.last.model);
